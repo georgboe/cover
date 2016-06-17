@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -12,14 +14,15 @@ import (
 )
 
 type file struct {
-	path     string
 	filename string
 	basename string
+	testname string
+	isTest   bool
 }
 
 type fileAndTest struct {
-	sourcefile file
-	testfile   file
+	sourcefile *file
+	testfile   *file
 }
 
 type byBasename []file
@@ -30,20 +33,21 @@ func (s byBasename) Less(i, j int) bool {
 	return strings.Compare(s[i].basename, s[j].basename) == -1
 }
 
-func getFiles() []file {
-	scanner := bufio.NewScanner(os.Stdin)
-	var files []file
+func getFiles(reader io.Reader) []file {
+	scanner := bufio.NewScanner(reader)
+	files := make([]file, 0, 10)
 	for scanner.Scan() {
 		path := scanner.Text()
 		if len(path) == 0 {
 			continue
 		}
 		f := file{
-			path:     path,
 			filename: filepath.Base(path),
 		}
 		f.basename = strings.ToLower(
 			strings.TrimSuffix(f.filename, filepath.Ext(f.filename)))
+		f.testname = f.basename + "test"
+		f.isTest = strings.HasSuffix(f.basename, "test")
 		files = append(files, f)
 	}
 	if err := scanner.Err(); err != nil {
@@ -53,27 +57,29 @@ func getFiles() []file {
 }
 
 func getPairs(files []file) []fileAndTest {
-	var pairs []fileAndTest
-	fileList := make(map[string]file)
-	for _, f := range files {
+	fileCount := len(files)
+	pairs := make([]fileAndTest, 0, fileCount)
+	fileList := make(map[string]*file, fileCount)
+	for i := range files {
+		f := &files[i]
 		fileList[f.basename] = f
 	}
 
-	skippedFiles := make(map[string]interface{})
-	var ok bool
-	for _, f := range files {
+	skippedFiles := make(map[*file]bool)
+	for i := range files {
+		f := &files[i]
 
-		_, ok = skippedFiles[f.path]
+		_, ok := skippedFiles[f]
 		if ok {
 			continue
 		}
 
-		testFile, ok := fileList[f.basename+"test"]
+		testFile, ok := fileList[f.testname]
 
 		if ok {
 			pairs = append(pairs, fileAndTest{sourcefile: f, testfile: testFile})
-			skippedFiles[testFile.path] = nil
-		} else if strings.HasSuffix(f.basename, "test") {
+			skippedFiles[testFile] = false
+		} else if f.isTest {
 			pairs = append(pairs, fileAndTest{testfile: f})
 		} else {
 			pairs = append(pairs, fileAndTest{sourcefile: f})
@@ -82,16 +88,33 @@ func getPairs(files []file) []fileAndTest {
 	return pairs
 }
 
-func main() {
-	files := getFiles()
+func getData(reader io.Reader) []fileAndTest {
+	files := getFiles(reader)
 	sort.Sort(byBasename(files))
-	pairs := getPairs(files)
+	return getPairs(files)
+}
+
+func main() {
+	debug.SetGCPercent(-1)
+	pairs := getData(os.Stdin)
 
 	table := tablewriter.NewWriter(os.Stdout)
 	table.SetHeader([]string{"Source", "Test"})
 
 	for _, v := range pairs {
-		table.Append([]string{v.sourcefile.filename, v.testfile.filename})
+
+		var sourceFile string
+		var testFile string
+
+		if v.sourcefile != nil {
+			sourceFile = v.sourcefile.filename
+		}
+
+		if v.testfile != nil {
+			testFile = v.testfile.filename
+		}
+
+		table.Append([]string{sourceFile, testFile})
 	}
 	table.Render()
 }
