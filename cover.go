@@ -4,50 +4,49 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
-	"runtime/debug"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/olekukonko/tablewriter"
 )
 
 type file struct {
 	filename string
-	basename string
-	testname string
+	sortname string
 	isTest   bool
+	testFile *file
+	keep     bool
 }
 
-type fileAndTest struct {
-	sourcefile *file
-	testfile   *file
-}
+var (
+	buffer = make([]byte, 255, 255)
+)
 
-type byBasename []file
-
-func (s byBasename) Len() int      { return len(s) }
-func (s byBasename) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-func (s byBasename) Less(i, j int) bool {
-	return strings.Compare(s[i].basename, s[j].basename) == -1
+func timeTrack(start time.Time, name string) {
+	elapsed := time.Since(start)
+	log.Printf("%s took %s", name, elapsed)
 }
 
 func getFiles(reader io.Reader) []file {
 	scanner := bufio.NewScanner(reader)
-	files := make([]file, 0, 10)
+	scanner.Buffer(buffer, 255)
+	var files []file
+	var path string
 	for scanner.Scan() {
-		path := scanner.Text()
+		path = scanner.Text()
 		if len(path) == 0 {
 			continue
 		}
 		f := file{
 			filename: filepath.Base(path),
 		}
-		f.basename = strings.ToLower(
-			strings.TrimSuffix(f.filename, filepath.Ext(f.filename)))
-		f.testname = f.basename + "test"
-		f.isTest = strings.HasSuffix(f.basename, "test")
+		basename := strings.ToLower(strings.TrimSuffix(f.filename, filepath.Ext(f.filename)))
+		f.isTest = strings.HasSuffix(basename, "test")
+		f.sortname = strings.Replace(f.filename, "Test.", ".", 1)
 		files = append(files, f)
 	}
 	if err := scanner.Err(); err != nil {
@@ -56,46 +55,73 @@ func getFiles(reader io.Reader) []file {
 	return files
 }
 
-func getPairs(files []file) []fileAndTest {
-	fileCount := len(files)
-	pairs := make([]fileAndTest, 0, fileCount)
-	fileList := make(map[string]*file, fileCount)
-	for i := range files {
-		f := &files[i]
-		fileList[f.basename] = f
-	}
+func createPairs(files []file) {
+	numFiles := len(files)
+	var skip bool
+	var f *file
+	for i := 0; i < numFiles; i++ {
+		f = &files[i]
 
-	skippedFiles := make(map[*file]bool)
-	for i := range files {
-		f := &files[i]
-
-		_, ok := skippedFiles[f]
-		if ok {
+		if skip {
+			skip = false
 			continue
 		}
 
-		testFile, ok := fileList[f.testname]
+		var otherFile *file
+		if i+1 < numFiles {
+			otherFile = &files[i+1]
+		}
 
-		if ok {
-			pairs = append(pairs, fileAndTest{sourcefile: f, testfile: testFile})
-			skippedFiles[testFile] = false
-		} else if f.isTest {
-			pairs = append(pairs, fileAndTest{testfile: f})
+		if otherFile != nil && f.sortname == otherFile.sortname {
+			f.testFile = otherFile
+			f.keep = true
+			skip = true
+		} else if f.isTest && otherFile != nil && !otherFile.isTest && f.sortname == otherFile.sortname {
+			otherFile.testFile = f
+			otherFile.keep = true
 		} else {
-			pairs = append(pairs, fileAndTest{sourcefile: f})
+			f.keep = true
 		}
 	}
-	return pairs
 }
 
-func getData(reader io.Reader) []fileAndTest {
+func getData(reader io.Reader) []file {
 	files := getFiles(reader)
-	sort.Sort(byBasename(files))
-	return getPairs(files)
+	qsort(files)
+	createPairs(files)
+	return files
+}
+
+func qsort(a []file) {
+	if len(a) < 2 {
+		return
+	}
+
+	left, right := 0, len(a)-1
+
+	// Pick a pivot
+	pivotIndex := rand.Int() % len(a)
+
+	// Move the pivot to the right
+	a[pivotIndex], a[right] = a[right], a[pivotIndex]
+
+	// Pile elements smaller than the pivot on the left
+	for i := range a {
+		if strings.Compare(a[i].sortname, a[right].sortname) == -1 {
+			a[i], a[left] = a[left], a[i]
+			left++
+		}
+	}
+
+	// Place the pivot after the last smaller element
+	a[left], a[right] = a[right], a[left]
+
+	// Go down the rabbit hole
+	qsort(a[:left])
+	qsort(a[left+1:])
 }
 
 func main() {
-	debug.SetGCPercent(-1)
 	pairs := getData(os.Stdin)
 
 	table := tablewriter.NewWriter(os.Stdout)
@@ -103,18 +129,24 @@ func main() {
 
 	for _, v := range pairs {
 
+		if !v.keep {
+			continue
+		}
+
 		var sourceFile string
 		var testFile string
 
-		if v.sourcefile != nil {
-			sourceFile = v.sourcefile.filename
-		}
-
-		if v.testfile != nil {
-			testFile = v.testfile.filename
+		if !v.isTest {
+			sourceFile = v.filename
+			if v.testFile != nil {
+				testFile = v.testFile.filename
+			}
+		} else {
+			testFile = v.filename
 		}
 
 		table.Append([]string{sourceFile, testFile})
 	}
+
 	table.Render()
 }
