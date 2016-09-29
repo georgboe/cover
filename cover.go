@@ -4,12 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -26,11 +24,6 @@ var (
 	buffer = make([]byte, 255, 255)
 )
 
-func timeTrack(start time.Time, name string) {
-	elapsed := time.Since(start)
-	log.Printf("%s took %s", name, elapsed)
-}
-
 func getFiles(reader io.Reader) []file {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(buffer, 255)
@@ -46,7 +39,7 @@ func getFiles(reader io.Reader) []file {
 		}
 		basename := strings.ToLower(strings.TrimSuffix(f.filename, filepath.Ext(f.filename)))
 		f.isTest = strings.HasSuffix(basename, "test")
-		f.sortname = strings.Replace(f.filename, "Test.", ".", 1)
+		f.sortname = strings.ToLower(strings.Replace(f.filename, "Test.", ".", 1))
 		files = append(files, f)
 	}
 	if err := scanner.Err(); err != nil {
@@ -72,7 +65,7 @@ func createPairs(files []file) {
 			otherFile = &files[i+1]
 		}
 
-		if otherFile != nil && f.sortname == otherFile.sortname {
+		if !f.isTest && otherFile != nil && f.sortname == otherFile.sortname {
 			f.testFile = otherFile
 			f.keep = true
 			skip = true
