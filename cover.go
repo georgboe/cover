@@ -6,48 +6,33 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"sort"
 	"strings"
 
-	"github.com/olekukonko/tablewriter"
+	"github.com/georgboe/cover/formatters"
+	"github.com/georgboe/cover/models"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
-type file struct {
-	filename string
-	basename string
-	testname string
-	isTest   bool
-}
+var (
+	excel = kingpin.Flag("excel", "Use excel formatter.").Short('x').Bool()
+)
 
-type fileAndTest struct {
-	sourcefile *file
-	testfile   *file
-}
-
-type byBasename []file
-
-func (s byBasename) Len() int      { return len(s) }
-func (s byBasename) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-func (s byBasename) Less(i, j int) bool {
-	return strings.Compare(s[i].basename, s[j].basename) == -1
-}
-
-func getFiles(reader io.Reader) []file {
+func getFiles(reader io.Reader) []models.File {
 	scanner := bufio.NewScanner(reader)
-	files := make([]file, 0, 10)
+	files := make([]models.File, 0, 10)
 	for scanner.Scan() {
 		path := scanner.Text()
 		if len(path) == 0 {
 			continue
 		}
-		f := file{
-			filename: filepath.Base(path),
+		f := models.File{
+			Filename: filepath.Base(path),
 		}
-		f.basename = strings.ToLower(
-			strings.TrimSuffix(f.filename, filepath.Ext(f.filename)))
-		f.testname = f.basename + "test"
-		f.isTest = strings.HasSuffix(f.basename, "test")
+		f.Basename = strings.ToLower(
+			strings.TrimSuffix(f.Filename, filepath.Ext(f.Filename)))
+		f.Testname = f.Basename + "test"
+		f.IsTest = strings.HasSuffix(f.Basename, "test")
 		files = append(files, f)
 	}
 	if err := scanner.Err(); err != nil {
@@ -56,16 +41,16 @@ func getFiles(reader io.Reader) []file {
 	return files
 }
 
-func getPairs(files []file) []fileAndTest {
+func getPairs(files []models.File) []models.FileAndTest {
 	fileCount := len(files)
-	pairs := make([]fileAndTest, 0, fileCount)
-	fileList := make(map[string]*file, fileCount)
+	pairs := make([]models.FileAndTest, 0, fileCount)
+	fileList := make(map[string]*models.File, fileCount)
 	for i := range files {
 		f := &files[i]
-		fileList[f.basename] = f
+		fileList[f.Basename] = f
 	}
 
-	skippedFiles := make(map[*file]bool)
+	skippedFiles := make(map[*models.File]bool)
 	for i := range files {
 		f := &files[i]
 
@@ -74,47 +59,38 @@ func getPairs(files []file) []fileAndTest {
 			continue
 		}
 
-		testFile, ok := fileList[f.testname]
+		testFile, ok := fileList[f.Testname]
 
 		if ok {
-			pairs = append(pairs, fileAndTest{sourcefile: f, testfile: testFile})
+			pairs = append(pairs, models.FileAndTest{Sourcefile: f, Testfile: testFile})
 			skippedFiles[testFile] = false
-		} else if f.isTest {
-			pairs = append(pairs, fileAndTest{testfile: f})
+		} else if f.IsTest {
+			pairs = append(pairs, models.FileAndTest{Testfile: f})
 		} else {
-			pairs = append(pairs, fileAndTest{sourcefile: f})
+			pairs = append(pairs, models.FileAndTest{Sourcefile: f})
 		}
 	}
 	return pairs
 }
 
-func getData(reader io.Reader) []fileAndTest {
+func getData(reader io.Reader) []models.FileAndTest {
 	files := getFiles(reader)
-	sort.Sort(byBasename(files))
+	sort.Slice(files, func(i, j int) bool { return files[i].Basename < files[j].Basename })
 	return getPairs(files)
 }
 
 func main() {
-	debug.SetGCPercent(-1)
+	kingpin.Parse()
+
 	pairs := getData(os.Stdin)
 
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Source", "Test"})
+	var formatter formatters.Formatter
 
-	for _, v := range pairs {
+	formatter = formatters.TableFormatter{}
 
-		var sourceFile string
-		var testFile string
-
-		if v.sourcefile != nil {
-			sourceFile = v.sourcefile.filename
-		}
-
-		if v.testfile != nil {
-			testFile = v.testfile.filename
-		}
-
-		table.Append([]string{sourceFile, testFile})
+	if *excel {
+		formatter = formatters.ExcelFormatter{}
 	}
-	table.Render()
+
+	formatter.Render(pairs)
 }
